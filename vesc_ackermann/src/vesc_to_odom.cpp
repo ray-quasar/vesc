@@ -64,7 +64,7 @@ VescToOdom::VescToOdom(const rclcpp::NodeOptions & options)
   declare_parameter<double>("speed_to_erpm_offset", 0.0);
 
   speed_to_erpm_gain_ = get_parameter("speed_to_erpm_gain").get_value<double>();
-  speed_to_erpm_offset_ = get_parameter("speed_to_erpm_gain").get_value<double>();
+  speed_to_erpm_offset_ = get_parameter("speed_to_erpm_offset").get_value<double>();
 
   if (use_servo_cmd_) {
     declare_parameter<double>("steering_angle_to_servo_gain", 0.0);
@@ -104,7 +104,7 @@ void VescToOdom::vescStateCallback(const VescStateStamped::SharedPtr state)
   }
 
   // convert to engineering units
-  double current_speed = (-state->state.speed - speed_to_erpm_offset_) / speed_to_erpm_gain_;
+  double current_speed = (state->state.speed - speed_to_erpm_offset_) / speed_to_erpm_gain_; 
   if (std::fabs(current_speed) < 0.05) {
     current_speed = 0.0;
   }
