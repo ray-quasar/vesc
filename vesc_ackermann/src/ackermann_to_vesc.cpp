@@ -41,6 +41,7 @@ namespace vesc_ackermann
 {
 
 using ackermann_msgs::msg::AckermannDriveStamped;
+using nav_msgs::msg::Odometry;
 using std::placeholders::_1;
 using std_msgs::msg::Float64;
 
@@ -59,30 +60,68 @@ AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
   steering_to_servo_gain_ = get_parameter("steering_angle_to_servo_gain").get_value<double>();
   steering_to_servo_offset_ = get_parameter("steering_angle_to_servo_offset").get_value<double>();
 
+
   // create publishers to vesc electric-RPM (speed) and servo commands
   erpm_pub_ = create_publisher<Float64>("commands/motor/speed", 10);
   servo_pub_ = create_publisher<Float64>("commands/servo/position", 10);
 
+  // create brake publisher
+  brake_pub_ = create_publisher<Float64>("commands/motor/brake", 10);
+  current_vel_ = 0.0;
+  vel_diff_thresh_ = 0.3;
+
   // subscribe to ackermann topic
   ackermann_sub_ = create_subscription<AckermannDriveStamped>(
     "ackermann_cmd", 10, std::bind(&AckermannToVesc::ackermannCmdCallback, this, _1));
+
+  // subscribe to odom topic
+  odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+    "odom", 10, std::bind(&AckermannToVesc::odomCallback, this, _1));
+
 }
 
 void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPtr cmd)
 {
+  double commanded_vel = cmd->drive.speed;
+
   // calc vesc electric RPM (speed)
   Float64 erpm_msg;
-  erpm_msg.data = speed_to_erpm_gain_ * cmd->drive.speed + speed_to_erpm_offset_;
+  erpm_msg.data = speed_to_erpm_gain_ * commanded_vel + speed_to_erpm_offset_;
 
   // calc steering angle (servo)
   Float64 servo_msg;
   servo_msg.data = steering_to_servo_gain_ * cmd->drive.steering_angle + steering_to_servo_offset_;
 
-  // publish
+  // brake msg
+  Float64 brake_msg;
+  brake_msg.data = 20000;
+
+  // publish (original code)
+  // if (rclcpp::ok()) {
+  //   erpm_pub_->publish(erpm_msg);
+  //   servo_pub_->publish(servo_msg);
+  // }
+
+  // publish (new code)
   if (rclcpp::ok()) {
-    erpm_pub_->publish(erpm_msg);
-    servo_pub_->publish(servo_msg);
+    if (commanded_vel > 0 && current_vel_ > commanded_vel + vel_diff_thresh_) {
+      brake_pub_->publish(brake_msg);
+      servo_pub_->publish(servo_msg);
+    } else if (commanded_vel < 0 && current_vel_ < commanded_vel - vel_diff_thresh_) {
+      brake_pub_->publish(brake_msg);
+      servo_pub_->publish(servo_msg);
+    } else {
+      erpm_pub_->publish(erpm_msg);
+      servo_pub_->publish(servo_msg);
+    }
   }
+
+}
+
+void AckermannToVesc::odomCallback(const nav_msgs::msg::Odometry::SharedPtr odom_msg)
+{
+  current_vel_ = odom_msg->twist.twist.linear.x;
+  // RCLCPP_INFO(get_logger(), "Current velocity: %f", current_vel_);
 }
 
 }  // namespace vesc_ackermann
