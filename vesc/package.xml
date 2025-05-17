@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>vesc</name>
-  <version>1.1.0</version>
+  <version>1.2.0</version>
   <description>
     Metapackage for ROS interface to the Vedder VESC open source motor controller.
   </description>
@@ -13,14 +13,15 @@
   <url type="bugtracker">https://github.com/f1tenth/vesc/issues</url>
   <author email="boulet@ll.mit.edu">Michael T. Boulet</author>
   <author email="josh.whitley@autoware.org">Joshua Whitley</author>
+  <author email="hxue@ucsd.edu">Haoru Xue</author>
 
-  <buildtool_depend>catkin</buildtool_depend>
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
 
   <exec_depend>vesc_driver</exec_depend>
   <exec_depend>vesc_msgs</exec_depend>
   <exec_depend>vesc_ackermann</exec_depend>
 
   <export>
-    <metapackage/>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>
