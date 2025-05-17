@@ -68,7 +68,7 @@ AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
   // create brake publisher
   brake_pub_ = create_publisher<Float64>("commands/motor/brake", 10);
   current_vel_ = 0.0;
-  vel_diff_thresh_ = 0.3;
+  vel_diff_thresh_ = 0.1;
 
   // subscribe to ackermann topic
   ackermann_sub_ = create_subscription<AckermannDriveStamped>(
@@ -94,7 +94,20 @@ void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPt
 
   // brake msg
   Float64 brake_msg;
-  brake_msg.data = 20000;
+  // brake_msg.data = 20000;
+  //brake_msg.data = 10000;
+
+  // We wanto linearly increase the brake value from 0 to 20000
+  // if the commanded velocity is less than the current velocity
+  // The brake at at 0.5 difference between the commanded and current velocity should be 10000
+  // The brake at at 1.0 difference between the commanded and current velocity should be 20000
+
+  brake_msg.data = (current_vel_ - commanded_vel) * 20000;
+  if (brake_msg.data < 0) {
+    brake_msg.data = 0;
+  } else if (brake_msg.data > 20000) {
+    brake_msg.data = 20000;
+  }
 
   // publish (original code)
   // if (rclcpp::ok()) {
