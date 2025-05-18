@@ -88,22 +88,6 @@ void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPt
   Float64 erpm_msg;
   erpm_msg.data = speed_to_erpm_gain_ * commanded_vel + speed_to_erpm_offset_;
 
-  // calc vesc current/brake (acceleration)
-  bool is_positive_accel = true;
-  std_msgs::Float64::Ptr current_msg(new std_msgs::Float64);
-  std_msgs::Float64::Ptr brake_msg(new std_msgs::Float64);
-  current_msg->data = 0;
-  brake_msg->data = 0;
-  if (cmd->drive.acceleration < 0)
-  {
-    brake_msg->data = accel_to_brake_gain_ * cmd->drive.acceleration;
-    is_positive_accel = false;
-  }
-  else
-  {
-    current_msg->data = accel_to_current_gain_ * cmd->drive.acceleration;
-  }
-
   // calc steering angle (servo)
   Float64 servo_msg;
   servo_msg.data = steering_to_servo_gain_ * cmd->drive.steering_angle + steering_to_servo_offset_;
