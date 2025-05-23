@@ -53,7 +53,8 @@ AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
   declare_parameter("speed_to_erpm_offset", 0.0);
   declare_parameter("steering_angle_to_servo_gain", 0.0);
   declare_parameter("steering_angle_to_servo_offset", 0.0);
-  
+  declare_parameter("vel_diff_thresh", 0.1); 
+
   // get conversion parameters
   speed_to_erpm_gain_ = get_parameter("speed_to_erpm_gain").get_value<double>();
   speed_to_erpm_offset_ = get_parameter("speed_to_erpm_offset").get_value<double>();
@@ -65,10 +66,12 @@ AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
   erpm_pub_ = create_publisher<Float64>("commands/motor/speed", 10);
   servo_pub_ = create_publisher<Float64>("commands/servo/position", 10);
 
+  // get vel diff parameter
+  vel_diff_thresh_ = get_parameter("vel_diff_thresh").get_value<double>();
+
   // create brake publisher
   brake_pub_ = create_publisher<Float64>("commands/motor/brake", 10);
   current_vel_ = 0.0;
-  vel_diff_thresh_ = 0.1;
 
   // subscribe to ackermann topic
   ackermann_sub_ = create_subscription<AckermannDriveStamped>(
