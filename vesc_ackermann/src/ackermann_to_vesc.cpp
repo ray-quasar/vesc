@@ -31,7 +31,7 @@
 #include "vesc_ackermann/ackermann_to_vesc.hpp"
 
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
-#include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/float64.hpp>	
 
 #include <cmath>
 #include <sstream>
@@ -40,108 +40,312 @@
 namespace vesc_ackermann
 {
 
-using ackermann_msgs::msg::AckermannDriveStamped;
-using nav_msgs::msg::Odometry;
-using std::placeholders::_1;
-using std_msgs::msg::Float64;
+	using ackermann_msgs::msg::AckermannDriveStamped;
+	using nav_msgs::msg::Odometry;
+	using std::placeholders::_1;
+	using std_msgs::msg::Float64;
 
-AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
-: Node("ackermann_to_vesc_node", options)
-{
-  // declare parameters
-  declare_parameter("speed_to_erpm_gain", 0.0);
-  declare_parameter("speed_to_erpm_offset", 0.0);
-  declare_parameter("steering_angle_to_servo_gain", 0.0);
-  declare_parameter("steering_angle_to_servo_offset", 0.0);
-  declare_parameter("vel_diff_thresh", 0.1); 
+	AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions &options)
+			: Node("ackermann_to_vesc_node", options)
+	{
+		// Declare parameters, initialized with default 0
+		// These four are what we started with:
+		declare_parameter("speed_to_erpm_gain", 0.0);
+		declare_parameter("speed_to_erpm_offset", 0.0);
+		declare_parameter("steering_angle_to_servo_gain", 0.0);
+		declare_parameter("steering_angle_to_servo_offset", 0.0);
 
-  // get conversion parameters
-  speed_to_erpm_gain_ = get_parameter("speed_to_erpm_gain").get_value<double>();
-  speed_to_erpm_offset_ = get_parameter("speed_to_erpm_offset").get_value<double>();
-  steering_to_servo_gain_ = get_parameter("steering_angle_to_servo_gain").get_value<double>();
-  steering_to_servo_offset_ = get_parameter("steering_angle_to_servo_offset").get_value<double>();
+		// I added this one (originally just a regular variable) as part of the first braking test:
+		// Renaming to brake_deadzone
+		declare_parameter("brake_deadzone", 0.1);
+		
+		// I am adding these two in as part of the conversion to acceleration based control:
+		declare_parameter("accel_to_current_gain", 0.0);
+		declare_parameter("accel_to_brake_gain", 0.0)
+
+		// Get conversion parameters from config file, in our case 'vesc.yaml'
+		// Originals:
+		speed_to_erpm_gain_ = get_parameter("speed_to_erpm_gain").get_value<double>();
+		speed_to_erpm_offset_ = get_parameter("speed_to_erpm_offset").get_value<double>();
+		steering_to_servo_gain_ = get_parameter("steering_angle_to_servo_gain").get_value<double>();
+		steering_to_servo_offset_ = get_parameter("steering_angle_to_servo_offset").get_value<double>();
+
+		// Braking Test:
+		brake_deadzone_ = get_parameter("brake_deadzone").get_value<double>();
+
+		// Acceleration Test:
+		accel_to_current_gain_ = get_parameter("accel_to_current_gain").get_value<double>();
+		accel_to_brake_gain_ = get_parameter("accel_to_brake_gain").get_value<double>();
+
+		// Create publishers to VESC electric-RPM (speed) and servo commands
+		// The ERPM publisher should only be used if the acceleration parameter is 0
+		erpm_pub_ = create_publisher<Float64>("commands/motor/speed", 10);
+		servo_pub_ = create_publisher<Float64>("commands/servo/position", 10);
+
+		// Create brake publisher
+		brake_pub_ = create_publisher<Float64>("commands/motor/brake", 10);
+		// Initialize current velocity storage variable
+		current_vel_ = 0.0;
+
+		// Create current publisher
+		current_pub_ = create_publisher<Float64>("commands/motor/current", 10);
+
+		// Subscribe to Ackermann topic
+		// This is what supplies the input information for the rest of the code.
+		// I don't care to change the disparityExtender code, so we'll just work with the speed commands therein.
+		ackermann_sub_ = create_subscription<AckermannDriveStamped>(
+				"ackermann_cmd", 10, std::bind(&AckermannToVesc::ackermannCmdCallback, this, _1));
+
+		// Subscribe to odom topic
+		// Because we are just listening to the speed commands, we need a tracker of the existing velocity
+		odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+				"odom", 10, std::bind(&AckermannToVesc::odomCallback, this, _1));
+	}
+
+	void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPtr cmd)
+	{
+		// Calculate steering angle (servo)
+		Float64 servo_msg;
+		servo_msg.data = steering_to_servo_gain_ * cmd->drive.steering_angle + steering_to_servo_offset_;
+
+		// Calculate BLDC command
+		// Case 1: We are supplied the acceleration-to-current gain and acceleration-to-brake gain
+		if (accel_to_current_gain_ != 0 && accel_to_brake_gain_ != 0)
+		{
+			bool is_positive_accel = true;
+			// 1.1 We have an incoming acceleration command. 
+			if (cmd->drive.acceleration != 0)
+			{
+				if (cmd->drive.acceleration < 0)
+				{
+					// Apply controlled braking
+					Float64 brake_msg;
+					brake_msg.data = accel_to_brake_gain_ * cmd->drive.acceleration;
+					is_positive_accel = false;
+				} else
+				{
+					// Apply motor current (throttle)
+					Float64 current_msg;
+					current_msg.data = accel_to_current_gain_ * cmd->drive.acceleration;
+				}
+				previous_mode_speed_ = false;
+			}
+			// 1.2 We do not have an incoming acceleration command. We have an incoming velocity command.
+			else if (erpm_msg.data != 0 || previous_mode_speed_) {
+				// Calculate the required acceleration:
+				// TODO: Calculate dt 
+				double acceleration = (commanded_vel - current_vel_) / dt;  // Desired acceleration
+				if (acceleration > 0) 
+				{
+					// Apply motor current (throttle)
+					Float64 current_msg;
+					current_msg.data = acceleration * acceleration_to_current_gain;
+				} else 
+				{
+					// Apply controlled braking
+					Float64 brake_msg;
+					brake_msg.data = -acceleration * deceleration_to_brake_gain;
+					is_positive_accel = false;
+				}
+				previous_mode_speed_ = true;
+			}
+		}
+		// Case 2: If the acceleration-to-current gain and acceleration-to-brake gain is 0, then we operate entirely with the velocity message
+		else if (accel_to_current_gain_ == 0 && accel_to_brake_gain_ == 0)
+		{
+			double vel_diff = current_vel_ - commanded_vel;
+			// 2.1 The commanded velocity has increased:
+			if (vel_diff < 0) 
+			{
+				// Calculate the ERPM using the speed-to-ERPM gain and offset:
+				Float64 erpm_msg;
+				erpm_msg.data = speed_to_erpm_gain_ * commanded_vel + speed_to_erpm_offset_;
+			}
+			// 2.2 The commanded velocity has decreased:
+			if (vel_diff > 0) 
+			{
+				// Calculate the brake value:
+				brake_msg.data = (vel_diff) * 20000;	// Going to update this to a sigmoid probably
+				brake_msg.data = std::clamp(brake_msg.data, 0.0, 20000.0);
+				is_positive_accel_ = false;
+			}
+		}
+
+		// Publish motor commands:
+		if (rclcpp::ok())	{
+			if !(is_positive_accel)	{
+				// Publish brake
+				brake_pub_->publish(brake_msg);
+			} 
+			else	{
+				// Need to check whether we are operating based on ERPM or accel
+				if (/*accel*/) {
+					current_pub_->publish(current_msg);
+				} 
+				else if (/*ERPM*/)	{
+					erpm_pub_->publish(erpm_msg);
+				}
+			}
+			// Publish servo position
+			servo_pub_->publish(servo_msg);
+		}
+		
+		// @todo Brake sigmoid
+		// @todo Brake hysterisis
+		
+
+		// // calc vesc current/brake (acceleration)
+		
+		
+		// if (cmd->drive.acceleration < 0)
+		// {
+		// 	brake_msg.data = accel_to_brake_gain_ * cmd->drive.acceleration;
+		// 	is_positive_accel = false;
+		// }
+		// else
+		// {
+		// 	current_msg.data = accel_to_current_gain_ * cmd->drive.acceleration;
+		// }
 
 
-  // create publishers to vesc electric-RPM (speed) and servo commands
-  erpm_pub_ = create_publisher<Float64>("commands/motor/speed", 10);
-  servo_pub_ = create_publisher<Float64>("commands/servo/position", 10);
+		// // publish
+		// if (rclcpp::ok())
+		// {
+		// 	// The below code attempts to stick to the previous mode until a new message forces a mode switch.
+		// 	if (erpm_msg.data != 0 || previous_mode_speed_)
+		// 	{
+		// 		erpm_pub_->publish(erpm_msg);
+		// 	}
+		// 	else
+		// 	{
+		// 		if (is_positive_accel)
+		// 		{
+		// 			current_pub_->publish(current_msg);
+		// 		}
+		// 		else
+		// 		{
+		// 			brake_pub_->publish(brake_msg);
+		// 		}
+		// 	}
+		// 	servo_pub_->publish(servo_msg);
+		}
 
-  // get vel diff parameter
-  vel_diff_thresh_ = get_parameter("vel_diff_thresh").get_value<double>();
+		// The lines below are to determine which mode we are in so we can hold until new messages force a switch.
+		// if (erpm_msg.data != 0)
+		// {
+		// 	previous_mode_speed_ = true;
+		// }
+		// else if (current_msg.data != 0 || brake_msg.data != 0)
+		// {
+		// 	previous_mode_speed_ = false;
+		// }
 
-  // create brake publisher
-  brake_pub_ = create_publisher<Float64>("commands/motor/brake", 10);
-  current_vel_ = 0.0;
+		// brake msg
+		// Float64 brake_msg;
+		// brake_msg.data = 20000;
+		// brake_msg.data = 10000;
 
-  // subscribe to ackermann topic
-  ackermann_sub_ = create_subscription<AckermannDriveStamped>(
-    "ackermann_cmd", 10, std::bind(&AckermannToVesc::ackermannCmdCallback, this, _1));
+		// We wanto linearly increase the brake value from 0 to 20000
+		// if the commanded velocity is less than the current velocity
+		// The brake at at 0.5 difference between the commanded and current velocity should be 10000
+		// The brake at at 1.0 difference between the commanded and current velocity should be 20000
 
-  // subscribe to odom topic
-  odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-    "odom", 10, std::bind(&AckermannToVesc::odomCallback, this, _1));
+		// brake_msg.data = (current_vel_ - commanded_vel) * 20000;
+		// if (brake_msg.data < 0) {
+		//   brake_msg.data = 0;
+		// } else if (brake_msg.data > 20000) {
+		//   brake_msg.data = 20000;
+		// }
 
-}
+		// publish (original code)
+		// if (rclcpp::ok()) {
+		//   erpm_pub_->publish(erpm_msg);
+		//   servo_pub_->publish(servo_msg);
+		// }
 
-void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPtr cmd)
-{
-  double commanded_vel = cmd->drive.speed;
+		// publish (new code)
+		// if (rclcpp::ok()) {
+		//   if (commanded_vel > 0 && current_vel_ > commanded_vel + vel_diff_thresh_) {
+		//     brake_pub_->publish(brake_msg);
+		//     servo_pub_->publish(servo_msg);
+		//   } else if (commanded_vel < 0 && current_vel_ < commanded_vel - vel_diff_thresh_) {
+		//     brake_pub_->publish(brake_msg);
+		//     servo_pub_->publish(servo_msg);
+		//   } else {
+		//     erpm_pub_->publish(erpm_msg);
+		//     servo_pub_->publish(servo_msg);
+		//   }
+		// }
 
-  // calc vesc electric RPM (speed)
-  Float64 erpm_msg;
-  erpm_msg.data = speed_to_erpm_gain_ * commanded_vel + speed_to_erpm_offset_;
+		/*
+			// calc vesc electric RPM (speed)
+		std_msgs::Float64::Ptr erpm_msg(new std_msgs::Float64);
+		erpm_msg->data = speed_to_erpm_gain_ * cmd->drive.speed + speed_to_erpm_offset_;
 
-  // calc steering angle (servo)
-  Float64 servo_msg;
-  servo_msg.data = steering_to_servo_gain_ * cmd->drive.steering_angle + steering_to_servo_offset_;
+		// calc vesc current/brake (acceleration)
+		bool is_positive_accel = true;
+		std_msgs::Float64::Ptr current_msg(new std_msgs::Float64);
+		std_msgs::Float64::Ptr brake_msg(new std_msgs::Float64);
+		current_msg->data = 0;
+		brake_msg->data = 0;
+		if (cmd->drive.acceleration < 0)
+		{
+			brake_msg->data = accel_to_brake_gain_ * cmd->drive.acceleration;
+			is_positive_accel = false;
+		}
+		else
+		{
+			current_msg->data = accel_to_current_gain_ * cmd->drive.acceleration;
+		}
 
-  // brake msg
-  Float64 brake_msg;
-  // brake_msg.data = 20000;
-  //brake_msg.data = 10000;
+		// calc steering angle (servo)
+		std_msgs::Float64::Ptr servo_msg(new std_msgs::Float64);
+		servo_msg->data = steering_to_servo_gain_ * cmd->drive.steering_angle + steering_to_servo_offset_;
 
-  // We wanto linearly increase the brake value from 0 to 20000
-  // if the commanded velocity is less than the current velocity
-  // The brake at at 0.5 difference between the commanded and current velocity should be 10000
-  // The brake at at 1.0 difference between the commanded and current velocity should be 20000
 
-  brake_msg.data = (current_vel_ - commanded_vel) * 20000;
-  if (brake_msg.data < 0) {
-    brake_msg.data = 0;
-  } else if (brake_msg.data > 20000) {
-    brake_msg.data = 20000;
-  }
+		// publish
+		if (ros::ok())
+		{
+			// The below code attempts to stick to the previous mode until a new message forces a mode switch.
+			if (erpm_msg->data != 0 || previous_mode_speed_)
+			{
+				erpm_pub_.publish(erpm_msg);
+			}
+			else
+			{
+				if (is_positive_accel)
+				{
+					current_pub_.publish(current_msg);
+				}
+				else
+				{
+					brake_pub_.publish(brake_msg);
+				}
+			}
+			servo_pub_.publish(servo_msg);
+		}
 
-  // publish (original code)
-  // if (rclcpp::ok()) {
-  //   erpm_pub_->publish(erpm_msg);
-  //   servo_pub_->publish(servo_msg);
-  // }
+		// The lines below are to determine which mode we are in so we can hold until new messages force a switch.
+		if (erpm_msg->data != 0)
+		{
+			previous_mode_speed_ = true;
+		}
+		else if (current_msg->data != 0 || brake_msg->data != 0)
+		{
+			previous_mode_speed_ = false;
+		}
+		*/
+	}
 
-  // publish (new code)
-  if (rclcpp::ok()) {
-    if (commanded_vel > 0 && current_vel_ > commanded_vel + vel_diff_thresh_) {
-      brake_pub_->publish(brake_msg);
-      servo_pub_->publish(servo_msg);
-    } else if (commanded_vel < 0 && current_vel_ < commanded_vel - vel_diff_thresh_) {
-      brake_pub_->publish(brake_msg);
-      servo_pub_->publish(servo_msg);
-    } else {
-      erpm_pub_->publish(erpm_msg);
-      servo_pub_->publish(servo_msg);
-    }
-  }
+	void AckermannToVesc::odomCallback(const nav_msgs::msg::Odometry::SharedPtr odom_msg)
+	{
+		// Everytime there is a new publish to /odom, we update the current velocity
+		current_vel_ = odom_msg->twist.twist.linear.x;
+		// RCLCPP_INFO(get_logger(), "Current velocity: %f", current_vel_);
+	}
 
-}
+} // namespace vesc_ackermann
 
-void AckermannToVesc::odomCallback(const nav_msgs::msg::Odometry::SharedPtr odom_msg)
-{
-  current_vel_ = odom_msg->twist.twist.linear.x;
-  // RCLCPP_INFO(get_logger(), "Current velocity: %f", current_vel_);
-}
-
-}  // namespace vesc_ackermann
-
-#include "rclcpp_components/register_node_macro.hpp"  // NOLINT
+#include "rclcpp_components/register_node_macro.hpp" // NOLINT
 
 RCLCPP_COMPONENTS_REGISTER_NODE(vesc_ackermann::AckermannToVesc)
