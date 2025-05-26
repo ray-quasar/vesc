@@ -58,7 +58,13 @@ namespace vesc_ackermann
 		// I added this one (originally just a regular variable) as part of the first braking test:
 		// Renaming to brake_deadzone
 		declare_parameter("brake_deadzone", 0.1);
-		
+
+		// Adding braking parameters for VEL_TO_ERPM mode
+		declare_parameter("speed_to_braking_gain", 0.0);
+		declare_parameter("speed_to_braking_center", 0.0);
+		declare_parameter("speed_to_braking_max", 20000.0);
+		declare_parameter("speed_to_braking_min", 0.0);
+
 		// I am adding these two in as part of the conversion to acceleration based control:
 		declare_parameter("accel_to_current_gain", 0.0);
 		declare_parameter("accel_to_brake_gain", 0.0);
@@ -72,6 +78,12 @@ namespace vesc_ackermann
 
 		// Braking Test:
 		brake_deadzone_ = get_parameter("brake_deadzone").get_value<double>();
+
+		// Braking parameters for VEL_TO_ERPM mode
+		speed_to_braking_gain_ = get_parameter("speed_to_braking_gain").get_value<double>();
+		speed_to_braking_center_ = get_parameter("speed_to_braking_center").get_value<double>();
+		speed_to_braking_max_ = get_parameter("speed_to_braking_max").get_value<double>();
+		speed_to_braking_min_ = get_parameter("speed_to_braking_min").get_value<double>();
 
 		// Acceleration Test:
 		accel_to_current_gain_ = get_parameter("accel_to_current_gain").get_value<double>();
@@ -175,8 +187,12 @@ namespace vesc_ackermann
 			if (vel_diff > 0) 
 			{
 				// Calculate the brake value:
-				brake_msg.data = (vel_diff) * 20000;	// Going to update this to a sigmoid probably
-				brake_msg.data = std::clamp(brake_msg.data, 0.0, 20000.0);
+				// brake_msg.data = (vel_diff) * speed_to_braking_gain_ + speed_to_braking_center_;
+        		brake_msg.data = (
+                (speed_to_braking_max_) 
+                / (1 + exp(- speed_to_braking_gain_ * (vel_diff - speed_to_braking_center_))) 
+      			);
+				// brake_msg.data = std::clamp(brake_msg.data, 0.0, 20000.0);
 				is_positive_accel = false;
 			}
 		}
