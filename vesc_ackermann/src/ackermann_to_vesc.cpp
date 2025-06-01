@@ -176,6 +176,25 @@ namespace vesc_ackermann
 		{
 			operation_mode_ = VEL_TO_ERPM; // For deciding which message to publish
 			double commanded_vel = cmd->drive.speed;
+
+			// Case A: We have a postive commanded velocity:
+				// I. The commanded velocity is greater than the current velocity
+					// If the current velocity is zero we need to go slow to get a rotor position reading before we can accelerate
+						// Send a (0.5 m/s) ERPM message
+
+				// II. The commanded velocity is less than the current velocity
+					// Apply the BRAKE
+
+			// Case B: We have a negative commanded velocity:
+				// I. The commanded velocity is less (faster) than the current velocity
+					// If the current velocity is zero we need to go slow to get a rotor position reading
+						// Send a (-0.5 m/s) ERPM message
+
+				// II. The commanded velocity is greater (slower) than the current velocity
+					// Apply the BRAKE
+
+			// ----- OLD CODE ------
+
 			double vel_diff = current_vel_ - commanded_vel;
 			// 2.1 The commanded velocity has increased:
 			if (vel_diff < 0) 
@@ -217,152 +236,7 @@ namespace vesc_ackermann
 			servo_pub_->publish(servo_msg);
 		}
 	}
-		// @todo Brake sigmoid
-		// @todo Brake hysterisis
-		
 
-		// // calc vesc current/brake (acceleration)
-		
-		
-		// if (cmd->drive.acceleration < 0)
-		// {
-		// 	brake_msg.data = accel_to_brake_gain_ * cmd->drive.acceleration;
-		// 	is_positive_accel = false;
-		// }
-		// else
-		// {
-		// 	current_msg.data = accel_to_current_gain_ * cmd->drive.acceleration;
-		// }
-
-
-		// // publish
-		// if (rclcpp::ok())
-		// {
-		// 	// The below code attempts to stick to the previous mode until a new message forces a mode switch.
-		// 	if (erpm_msg.data != 0 || previous_mode_speed_)
-		// 	{
-		// 		erpm_pub_->publish(erpm_msg);
-		// 	}
-		// 	else
-		// 	{
-		// 		if (is_positive_accel)
-		// 		{
-		// 			current_pub_->publish(current_msg);
-		// 		}
-		// 		else
-		// 		{
-		// 			brake_pub_->publish(brake_msg);
-		// 		}
-		// 	}
-		// 	servo_pub_->publish(servo_msg);
-		// }
-
-		// The lines below are to determine which mode we are in so we can hold until new messages force a switch.
-		// if (erpm_msg.data != 0)
-		// {
-		// 	previous_mode_speed_ = true;
-		// }
-		// else if (current_msg.data != 0 || brake_msg.data != 0)
-		// {
-		// 	previous_mode_speed_ = false;
-		// }
-
-		// brake msg
-		// Float64 brake_msg;
-		// brake_msg.data = 20000;
-		// brake_msg.data = 10000;
-
-		// We wanto linearly increase the brake value from 0 to 20000
-		// if the commanded velocity is less than the current velocity
-		// The brake at at 0.5 difference between the commanded and current velocity should be 10000
-		// The brake at at 1.0 difference between the commanded and current velocity should be 20000
-
-		// brake_msg.data = (current_vel_ - commanded_vel) * 20000;
-		// if (brake_msg.data < 0) {
-		//   brake_msg.data = 0;
-		// } else if (brake_msg.data > 20000) {
-		//   brake_msg.data = 20000;
-		// }
-
-		// publish (original code)
-		// if (rclcpp::ok()) {
-		//   erpm_pub_->publish(erpm_msg);
-		//   servo_pub_->publish(servo_msg);
-		// }
-
-		// publish (new code)
-		// if (rclcpp::ok()) {
-		//   if (commanded_vel > 0 && current_vel_ > commanded_vel + vel_diff_thresh_) {
-		//     brake_pub_->publish(brake_msg);
-		//     servo_pub_->publish(servo_msg);
-		//   } else if (commanded_vel < 0 && current_vel_ < commanded_vel - vel_diff_thresh_) {
-		//     brake_pub_->publish(brake_msg);
-		//     servo_pub_->publish(servo_msg);
-		//   } else {
-		//     erpm_pub_->publish(erpm_msg);
-		//     servo_pub_->publish(servo_msg);
-		//   }
-		// }
-
-		/*
-			// calc vesc electric RPM (speed)
-		std_msgs::Float64::Ptr erpm_msg(new std_msgs::Float64);
-		erpm_msg->data = speed_to_erpm_gain_ * cmd->drive.speed + speed_to_erpm_offset_;
-
-		// calc vesc current/brake (acceleration)
-		bool is_positive_accel = true;
-		std_msgs::Float64::Ptr current_msg(new std_msgs::Float64);
-		std_msgs::Float64::Ptr brake_msg(new std_msgs::Float64);
-		current_msg->data = 0;
-		brake_msg->data = 0;
-		if (cmd->drive.acceleration < 0)
-		{
-			brake_msg->data = accel_to_brake_gain_ * cmd->drive.acceleration;
-			is_positive_accel = false;
-		}
-		else
-		{
-			current_msg->data = accel_to_current_gain_ * cmd->drive.acceleration;
-		}
-
-		// calc steering angle (servo)
-		std_msgs::Float64::Ptr servo_msg(new std_msgs::Float64);
-		servo_msg->data = steering_to_servo_gain_ * cmd->drive.steering_angle + steering_to_servo_offset_;
-
-
-		// publish
-		if (ros::ok())
-		{
-			// The below code attempts to stick to the previous mode until a new message forces a mode switch.
-			if (erpm_msg->data != 0 || previous_mode_speed_)
-			{
-				erpm_pub_.publish(erpm_msg);
-			}
-			else
-			{
-				if (is_positive_accel)
-				{
-					current_pub_.publish(current_msg);
-				}
-				else
-				{
-					brake_pub_.publish(brake_msg);
-				}
-			}
-			servo_pub_.publish(servo_msg);
-		}
-
-		// The lines below are to determine which mode we are in so we can hold until new messages force a switch.
-		if (erpm_msg->data != 0)
-		{
-			previous_mode_speed_ = true;
-		}
-		else if (current_msg->data != 0 || brake_msg->data != 0)
-		{
-			previous_mode_speed_ = false;
-		}
-		*/
-	// }
 
 	void AckermannToVesc::odomCallback(const nav_msgs::msg::Odometry::SharedPtr odom_msg)
 	{
