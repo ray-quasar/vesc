@@ -121,7 +121,8 @@ namespace vesc_ackermann
 		Float64 brake_msg;
 		Float64 current_msg;
 		Float64 erpm_msg;
-		bool is_positive_accel = true;
+		bool publish_brake = false;
+		bool publish_ERPM = false;
 
 		// Zero-initialize message data
 		brake_msg.data = 0.0;
@@ -144,7 +145,7 @@ namespace vesc_ackermann
 				{
 					// Apply controlled braking
 					brake_msg.data = accel_to_brake_gain_ * cmd->drive.acceleration;
-					is_positive_accel = false;
+					// is_positive_accel = false;
 				} else
 				{
 					// Apply motor current (throttle)
@@ -167,7 +168,7 @@ namespace vesc_ackermann
 				{
 					// Apply controlled braking
 					brake_msg.data = -acceleration * accel_to_brake_gain_;
-					is_positive_accel = false;
+					// is_positive_accel = false;
 				}
 			}
 		}
@@ -178,51 +179,127 @@ namespace vesc_ackermann
 			double commanded_vel = cmd->drive.speed;
 
 			// Case A: We have a postive commanded velocity:
+			if (commanded_vel >= 0)
+			{
 				// I. The commanded velocity is greater than the current velocity
+				if (commanded_vel >= current_vel_)
+				{
+					// If the current velocity is negative apply the brake
+					if (current_vel_ < 0)
+					{
+						// Calculate the brake value
+						brake_msg.data = (
+							(speed_to_braking_max_) 
+							/ (1 + exp(- speed_to_braking_gain_ * (abs(current_vel_ - commanded_vel) - speed_to_braking_center_))) 
+							);
+						publish_brake = true;
+					}
 					// If the current velocity is zero we need to go slow to get a rotor position reading before we can accelerate
+					else if (current_vel_ == 0 && commanded_vel > 0.5)
+					{
 						// Send a (0.5 m/s) ERPM message
-
+						// Calculate the ERPM using the speed-to-ERPM gain and offset:
+						erpm_msg.data = speed_to_erpm_gain_ * 0.5 + speed_to_erpm_offset_;
+							// Hopefully the compiler will pick this up and pre-evaluate
+						publish_ERPM = true;
+					}
+					// The current velocity is greater than zero
+					else
+					{
+						// Calculate the ERPM using the speed-to-ERPM gain and offset:
+						erpm_msg.data = speed_to_erpm_gain_ * commanded_vel + speed_to_erpm_offset_;
+						publish_ERPM = true;
+					}
+				}
 				// II. The commanded velocity is less than the current velocity
+				else if (commanded_vel < current_vel_)
+				{
 					// Apply the BRAKE
+					brake_msg.data = (
+						(speed_to_braking_max_) 
+						/ (1 + exp(- speed_to_braking_gain_ * (abs(current_vel_ - commanded_vel) - speed_to_braking_center_))) 
+						);
+					// is_positive_accel = false;
+					publish_brake = true;
+				}
+			}					
 
 			// Case B: We have a negative commanded velocity:
+			else if (commanded_vel < 0)
+			{
 				// I. The commanded velocity is less (faster) than the current velocity
+				if (commanded_vel <= current_vel_)
+				{
+					// If the current velocity is positive
+					if (current_vel_ > 0)
+					{
+						// Apply the brake
+						brake_msg.data = (
+							(speed_to_braking_max_) 
+							/ (1 + exp(- speed_to_braking_gain_ * (abs(current_vel_ - commanded_vel) - speed_to_braking_center_))) 
+							);
+						publish_brake = true;
+					}
 					// If the current velocity is zero we need to go slow to get a rotor position reading
+					else if (current_vel_ == 0 && commanded_vel < -0.5)
+					{
 						// Send a (-0.5 m/s) ERPM message
-
+						erpm_msg.data = speed_to_erpm_gain_ * -0.5 + speed_to_erpm_offset_;
+							// Hopefully the compiler will pick this up and pre-evaluate
+						publish_ERPM = true;
+					}
+					// The current velocity is negative
+					else 
+					{
+						// Calculate the ERPM using the speed-to-ERPM gain and offset:
+						erpm_msg.data = speed_to_erpm_gain_ * commanded_vel + speed_to_erpm_offset_;
+						publish_ERPM = true;
+					}
+				}
 				// II. The commanded velocity is greater (slower) than the current velocity
+				else if (commanded_vel > current_vel_)
+				{
 					// Apply the BRAKE
-
-			// ----- OLD CODE ------
-
-			double vel_diff = current_vel_ - commanded_vel;
-			// 2.1 The commanded velocity has increased:
-			if (vel_diff < 0) 
-			{
-				// Calculate the ERPM using the speed-to-ERPM gain and offset:
-				erpm_msg.data = speed_to_erpm_gain_ * commanded_vel + speed_to_erpm_offset_;
-			}
-			// 2.2 The commanded velocity has decreased:
-			if (vel_diff > 0) 
-			{
-				// Calculate the brake value:
-				// brake_msg.data = (vel_diff) * speed_to_braking_gain_ + speed_to_braking_center_;
-        		brake_msg.data = (
-                (speed_to_braking_max_) 
-                / (1 + exp(- speed_to_braking_gain_ * (vel_diff - speed_to_braking_center_))) 
-      			);
-				// brake_msg.data = std::clamp(brake_msg.data, 0.0, 20000.0);
-				is_positive_accel = false;
+					// Apply the BRAKE
+					brake_msg.data = (
+						(speed_to_braking_max_) 
+						/ (1 + exp(- speed_to_braking_gain_ * (abs(current_vel_ - commanded_vel) - speed_to_braking_center_))) 
+						);
+					// is_positive_accel = false;
+					publish_brake = true;
+				}
 			}
 		}
+			// ----- OLD CODE ------
+
+		// 	double vel_diff = current_vel_ - commanded_vel;
+		// 	// 2.1 The commanded velocity has increased:
+		// 	if (vel_diff < 0) 
+		// 	{
+		// 		// Calculate the ERPM using the speed-to-ERPM gain and offset:
+		// 		erpm_msg.data = speed_to_erpm_gain_ * commanded_vel + speed_to_erpm_offset_;
+		// 	}
+		// 	// 2.2 The commanded velocity has decreased:
+		// 	if (vel_diff > 0) 
+		// 	{
+		// 		// Calculate the brake value:
+		// 		// brake_msg.data = (vel_diff) * speed_to_braking_gain_ + speed_to_braking_center_;
+        // 		brake_msg.data = (
+        //         (speed_to_braking_max_) 
+        //         / (1 + exp(- speed_to_braking_gain_ * (vel_diff - speed_to_braking_center_))) 
+      	// 		);
+		// 		// brake_msg.data = std::clamp(brake_msg.data, 0.0, 20000.0);
+		// 		is_positive_accel = false;
+		// 	}
+		// }
 
 		// Publish motor commands:
 		if (rclcpp::ok()) {
-			if (!is_positive_accel) {
+			if (publish_brake) {
 				if (brake_msg.data != 0.0) {  // Only publish if we actually set a brake value
 					brake_pub_->publish(brake_msg);
 				}
-			} else {
+			} else if (publish_ERPM) {
 				if (operation_mode_ == ACCEL_TO_CURRENT || operation_mode_ == VEL_TO_CURRENT) {
 					if (current_msg.data != 0.0) {
 						current_pub_->publish(current_msg);
