@@ -195,11 +195,11 @@ namespace vesc_ackermann
 						publish_brake = true;
 					}
 					// If the current velocity is zero we need to go slow to get a rotor position reading before we can accelerate
-					else if (current_vel_ == 0 && commanded_vel > 0.5)
+					else if (current_vel_ < 1 && commanded_vel > 1)
 					{
 						// Send a (0.5 m/s) ERPM message
 						// Calculate the ERPM using the speed-to-ERPM gain and offset:
-						erpm_msg.data = speed_to_erpm_gain_ * 0.5 + speed_to_erpm_offset_;
+						erpm_msg.data = speed_to_erpm_gain_ * (current_vel_ + 0.4) + speed_to_erpm_offset_;
 							// Hopefully the compiler will pick this up and pre-evaluate
 						publish_ERPM = true;
 					}
